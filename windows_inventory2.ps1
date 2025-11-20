@@ -1,11 +1,11 @@
+# Backup before replacing (run manually if you want)
+# Copy-Item .\Full_Inventory2.ps1 .\Full_Inventory2.ps1.bak -Force
+
 <#
 Full_Inventory2.ps1
 - Software -> C:\<ComputerName>\Software\<RUNLABEL>\
 - Hardware -> C:\<ComputerName>\Hardware\<RUNLABEL>\ (single hwinfo.xlsx workbook)
-- Usage: .\Full_Inventory2.ps1 
-
-Changes: Based on Srinivas output, I have mended try-catch statements, where needed. this new script may be used as second script if the first one Full_Inventory2.ps1 fails
-
+- Usage: .\Full_Inventory2.ps1 [-FullMode]
 #>
 
 param(
