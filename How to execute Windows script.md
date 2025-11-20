@@ -1,5 +1,4 @@
-### How to execute Windows script "windows.ps1"
-#### You have to perform 2 actions:
+### You have to perform 2 actions:
 1. Execute the script
 2. ZIP the folder and send us
 
