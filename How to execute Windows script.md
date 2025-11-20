@@ -5,11 +5,11 @@
 #### Folder structure for your understanding:
 If the PC name is MYPC, the structure would be
 
-**C:\MYPC**
-├───**Hardware**
-│   └───2025-NOV-20-20-21-39 {something like this}
-└───**Software**
-    └───2025-NOV-20-20-21-39 {something like this}
+C:\MYPC
+├───Hardware
+│ └───2025-NOV-20-20-45-23
+└───Software
+└───2025-NOV-20-20-45-23
 
 ZIP the parent **C:\MYPC** folder
 
