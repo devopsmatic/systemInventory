@@ -47,3 +47,17 @@ or
 
 Invoke-WebRequest https://raw.githubusercontent.com/devopsmatic/systemInventory/refs/heads/main/windows_inventory.ps1 -UseBasicParsing | Invoke-Expression
 ```
+
+## if the above scripts fail try this:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+iwr https://raw.githubusercontent.com/devopsmatic/systemInventory/refs/heads/main/windows_inventory2.ps1 -UseBasicParsing | iex
+
+or
+
+Invoke-WebRequest https://raw.githubusercontent.com/devopsmatic/systemInventory/refs/heads/main/windows_inventory2.ps1 -UseBasicParsing | Invoke-Expression
+
+```
+
