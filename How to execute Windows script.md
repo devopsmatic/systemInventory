@@ -4,6 +4,7 @@
 
 #### Folder structure for your understanding:
 If the PC name is MYPC, the structure would be
+```
 
 C:\MYPC
 ├───Hardware
@@ -28,7 +29,7 @@ C:\MYPC
         ├─ VSCode-Extensions.txt
         ├─ Docker-Info.txt
         └─ Summary.txt                 # run summary (rows, timestamp, user, run label)
-
+```
 
 ZIP the parent **C:\MYPC** folder
 
