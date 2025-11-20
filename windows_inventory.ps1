@@ -653,7 +653,7 @@ Write-Host "Hardware outputs -> $hardwareRunFolder" -ForegroundColor Green
 if (Test-Path $softwareXlsx) { Write-Host ("Software Excel -> " + $softwareXlsx) -ForegroundColor Cyan }
 if (Test-Path $hwExcelWorkbook) { Write-Host ("Hardware Excel -> " + $hwExcelWorkbook) -ForegroundColor Cyan }
 Write-Host "If ImportExcel failed, check hwinfo-errors.txt in the hardware folder." -ForegroundColor Yellow
+
 # Return object for interactive runs
 return $result
 #endregion
-```
