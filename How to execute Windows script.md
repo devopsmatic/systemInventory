@@ -7,9 +7,28 @@ If the PC name is MYPC, the structure would be
 
 C:\MYPC
 ├───Hardware
-│ └───2025-NOV-20-20-45-23
+│   └───2025-NOV-20-20-45-23
+│       ├─ hwinfo.xlsx                 # consolidated workbook with sheets: Summary, Processors, Memory, Video, Disks, LogicalDisks, Network, USB, Serial
+│       ├─ hwinfo.csv                  # flattened summary row (fallback / quick view)
+│       └─ hwinfo-errors.txt           # any hwinfo exceptions / diagnostics
 └───Software
-└───2025-NOV-20-20-45-23
+    └───2025-NOV-20-20-45-23
+        ├─ InstalledSoftware.csv       # deduplicated software inventory (master CSV)
+        ├─ InstalledSoftware.xlsx      # Excel export of software inventory
+        ├─ Consolidated-Software-And-Env.csv
+        ├─ Env-System.csv              # machine environment variables
+        ├─ Env-User.csv                # user environment variables
+        ├─ All-EnvironmentVariables.csv
+        ├─ Git-Config.txt
+        ├─ Git-SSH-Config.txt
+        ├─ Python-<interpreter>-Packages.txt  # pip freeze outputs per interpreter
+        ├─ Python-Packages-Summary.txt
+        ├─ NodeJS.txt
+        ├─ VSCode-Settings.json
+        ├─ VSCode-Extensions.txt
+        ├─ Docker-Info.txt
+        └─ Summary.txt                 # run summary (rows, timestamp, user, run label)
+
 
 ZIP the parent **C:\MYPC** folder
 
