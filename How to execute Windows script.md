@@ -38,12 +38,12 @@ ZIP the parent **C:\MYPC** folder
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-iwr https://raw.githubusercontent.com/devopsmatic/systemInventory/refs/heads/main/windows.ps1 -UseBasicParsing | iex
+iwr https://raw.githubusercontent.com/devopsmatic/systemInventory/refs/heads/main/windows_inventory.ps1 -UseBasicParsing | iex
 
 ```
 or
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-Invoke-WebRequest https://raw.githubusercontent.com/devopsmatic/systemInventory/refs/heads/main/windows.ps1 -UseBasicParsing | Invoke-Expression
+Invoke-WebRequest https://raw.githubusercontent.com/devopsmatic/systemInventory/refs/heads/main/windows_inventory.ps1 -UseBasicParsing | Invoke-Expression
 ```
