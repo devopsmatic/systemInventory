@@ -1,42 +1,44 @@
 ```powershell
 <#
-What are we capturing:
-Software installed and certain key configurations or software settings by the developer
+Full_Inventory.ps1
+- Software -> C:\<ComputerName>\Software\<RUNLABEL>\
+- Hardware -> C:\<ComputerName>\Hardware\<RUNLABEL>\ (single hwinfo.xlsx workbook)
+- Usage: .\Full_Inventory.ps1
 
-How to RUN:
-1. Any developer with admin rights can peform this action.
-2. Save the script as Collect-Software-Fast.ps1 in Downloads folder.
-3. Run PowerShell as Administrator.
-
-Send us this:
-4. This script will create a folder structure:
-C:\MYPC
-└───InstalledSoftware
-    └───2025-NOV-20-15-39-46-MYPC
-        └───Configs
-Where MYPC = the current Computer Name
-
-Zip this folder MYPC and send us. 
-Example: MYPC.zip (MYPC is my Computer Name)
-
-What if you run this script multiple times:
-NOTHING TO WORRY
-
-Each run creates an unique folder that has a different DATE TIME like: 
-2025-NOV-20-15-39-46-MYPC
-2025-NOV-20-18-00-23-MYPC 
-2025-NOV-22-11-55-11-MYPC
-
-Just ZIP the TOP LEVEL FOLDER that is the Computer Name and send us
+You ZIP and send us the fodler: C:\<ComputerName>
+Example, My Computer name is: MYPC
+The folder I have to ZIP is: C:\MYPC and send MYPC.zip
 #>
 
-
 param(
-    [switch]$FullMode  # if specified, do the slower provider-by-provider Get-Package enumeration
+    [switch]$FullMode
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
+
+# Relaunch under Bypass once if process policy not Bypass
+if (-not $env:COLLECT_SOFT_BYPASS) {
+    try { $procPolicy = Get-ExecutionPolicy -Scope Process -ErrorAction SilentlyContinue } catch { $procPolicy = $null }
+    if ($procPolicy -ne 'Bypass') {
+        Write-Host "Relaunching script with ExecutionPolicy Bypass..." -ForegroundColor Cyan
+        $pwshCmd = Get-Command -Name pwsh -ErrorAction SilentlyContinue
+        $psCmd = Get-Command -Name powershell -ErrorAction SilentlyContinue
+        $exe = if ($pwshCmd) { $pwshCmd.Source } elseif ($psCmd) { $psCmd.Source } else { $null }
+        if (-not $exe) {
+            Write-Host "Cannot find powershell executable to relaunch. Run manually with:" -ForegroundColor Yellow
+            Write-Host "  powershell -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Definition)`"" -ForegroundColor Yellow
+            exit 1
+        }
+        $scriptPath = $MyInvocation.MyCommand.Definition
+        $fmArg = if ($FullMode) { '-FullMode' } else { '' }
+        # Build command to run in the child process
+        $childCmd = '$env:COLLECT_SOFT_BYPASS="1"; &' + " `"$scriptPath`" $fmArg"
+        $args = @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$childCmd)
+        $p = Start-Process -FilePath $exe -ArgumentList $args -Wait -PassThru
+        if ($p) { exit $p.ExitCode } else { exit 0 }
+    }
+}
 
 #region Helpers
 function Get-HumanRunLabel {
@@ -61,32 +63,37 @@ function Show-Err { param($m) Write-Host ("ERROR: " + $m) -ForegroundColor Red }
 #endregion
 
 #region Prepare output folders
-# Updated steps count (one extra for hwinfo)
-$totalSteps = 17
+$totalSteps = 16
 $currentStep = 0
 
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Preparing output folder"
+$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Preparing output folders"
 $computerName = $env:COMPUTERNAME
-$baseFolder = Join-Path "C:\" "$computerName\InstalledSoftware"
-try {
-    if (-not (Test-Path $baseFolder)) { New-Item -Path $baseFolder -ItemType Directory -Force | Out-Null; Write-Host ("Created base folder: " + $baseFolder) -ForegroundColor Green }
-    else { Write-Host ("Base folder exists: " + $baseFolder) -ForegroundColor Green }
-} catch { Show-Err ("Cannot create base folder: " + $_.Exception.Message); throw }
-
 $runLabel = Get-HumanRunLabel
-$runFolderName = "$runLabel-$computerName"
-$runFolder = Join-Path $baseFolder $runFolderName
-New-Item -Path $runFolder -ItemType Directory -Force | Out-Null
-$configFolder = Join-Path $runFolder "Configs"
-New-Item -Path $configFolder -ItemType Directory -Force | Out-Null
 
-$csvPath = Join-Path $runFolder "InstalledSoftware.csv"
-$excelPath = Join-Path $runFolder "InstalledSoftware.xlsx"
+# Software folder
+$baseSoftware = Join-Path "C:\" "$computerName\Software"
+if (-not (Test-Path $baseSoftware)) { New-Item -Path $baseSoftware -ItemType Directory -Force | Out-Null }
+$softwareRunFolder = Join-Path $baseSoftware $runLabel
+New-Item -Path $softwareRunFolder -ItemType Directory -Force | Out-Null
 
-Write-Host ("Outputs under: " + $runFolder) -ForegroundColor Cyan
+# Hardware folder
+$baseHardware = Join-Path "C:\" "$computerName\Hardware"
+if (-not (Test-Path $baseHardware)) { New-Item -Path $baseHardware -ItemType Directory -Force | Out-Null }
+$hardwareRunFolder = Join-Path $baseHardware $runLabel
+New-Item -Path $hardwareRunFolder -ItemType Directory -Force | Out-Null
+
+# Common paths
+$softwareCsv = Join-Path $softwareRunFolder "InstalledSoftware.csv"
+$softwareXlsx = Join-Path $softwareRunFolder "InstalledSoftware.xlsx"
+$hwCsvSummary = Join-Path $hardwareRunFolder "hwinfo.csv"
+$hwExcelWorkbook = Join-Path $hardwareRunFolder "hwinfo.xlsx"
+$hwErrorFile = Join-Path $hardwareRunFolder "hwinfo-errors.txt"
+
+Write-Host "Software outputs -> $softwareRunFolder" -ForegroundColor Cyan
+Write-Host "Hardware outputs -> $hardwareRunFolder" -ForegroundColor Cyan
 #endregion
 
-#region Collect: Registry uninstall entries (fast, guarded)
+#region Collect: Registry uninstall entries
 $currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Collecting registry Uninstall entries"
 $softwareList = [System.Collections.Generic.List[PSObject]]::new()
 $regPaths = @(
@@ -136,7 +143,7 @@ foreach ($path in $regPaths) {
 Write-Host ("Registry entries collected: " + $softwareList.Count) -ForegroundColor Green
 #endregion
 
-#region Collect: MSI products via COM (fast and reliable)
+#region Collect: MSI via COM
 $currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Enumerating MSI products (COM)"
 try {
     $msi = New-Object -ComObject WindowsInstaller.Installer
@@ -145,9 +152,7 @@ try {
     foreach ($p in $prods) {
         $i++; $pct = [int](($i/$total)*100)
         Write-Progress -Id 2 -Activity "MSI enumeration" -Status ("Processing MSI product $i / $total") -PercentComplete $pct
-        try {
-            $name = $msi.ProductInfo($p, "InstalledProductName") -as [string]
-        } catch { $name = $null }
+        try { $name = $msi.ProductInfo($p, "InstalledProductName") -as [string] } catch { $name = $null }
         try { $ver = $msi.ProductInfo($p, "VersionString") -as [string] } catch { $ver = $null }
         $softwareList.Add([PSCustomObject]@{
             Source = "MSI"
@@ -171,7 +176,7 @@ try {
 }
 #endregion
 
-#region Collect: Appx (Store) local
+#region Collect: Appx packages
 $currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Collecting Appx (Store) packages"
 try {
     $appx = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue
@@ -197,7 +202,7 @@ try {
 } catch { Show-Warn ("Get-AppxPackage failed: " + $_.Exception.Message) }
 #endregion
 
-#region Collect: winget local DB (fast local)
+#region Collect: winget local DB
 $currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Collecting winget local DB (if present)"
 try {
     $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
@@ -230,12 +235,12 @@ try {
 } catch { Show-Warn ("winget invocation failed: " + $_.Exception.Message) }
 #endregion
 
-#region Collect: Program Files quick heuristic (portable apps)
+#region Collect: ProgramFiles heuristic (portable apps)
 $currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Scanning Program Files (heuristic)"
 try {
-    $pfRoots = @("$env:ProgramFiles","$env:ProgramFiles(x86)","$env:LocalAppData\Programs")
+    $pfRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LocalAppData 'Programs'))
     foreach ($root in $pfRoots) {
-        if (Test-Path $root) {
+        if ($root -and (Test-Path $root)) {
             foreach ($d in Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue) {
                 $exe = Get-ChildItem -Path $d.FullName -Filter *.exe -File -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($exe) {
@@ -261,16 +266,15 @@ try {
 } catch { Show-Warn ("ProgramFiles scan failed: " + $_.Exception.Message) }
 #endregion
 
-#region Optional: FullMode (provider-by-provider) - only if user asked explicitly
+#region Optional: FullMode Get-Package provider enumeration
 if ($FullMode) {
     $currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Running Get-Package (provider-by-provider, FULL MODE)"
     try {
         $allPkgs = Get-Package -ErrorAction SilentlyContinue
         if ($allPkgs) {
             $providers = $allPkgs | Group-Object -Property ProviderName
-            $pi = 0; $tp = $providers.Count
             foreach ($g in $providers) {
-                $pi++; $provName = $g.Name
+                $provName = $g.Name
                 $pkgs = $g.Group; $totalPkgs = $pkgs.Count; $i=0
                 $sw = [Diagnostics.Stopwatch]::StartNew()
                 foreach ($p in $pkgs) {
@@ -307,7 +311,7 @@ if ($FullMode) {
 #region Deduplicate & shape output
 $currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Deduplicating and shaping results"
 try {
-    $grouped = $softwareList | Group-Object @{Expression = { ($_.Name -as [string]).ToLower() + '|' + ($_.Version -as [string]) } }
+    $grouped = $softwareList | Where-Object { $_.Name } | Group-Object @{Expression = { ($_.Name -as [string]).ToLower() + '|' + ($_.Version -as [string]) } }
     $deduped = foreach ($g in $grouped) {
         $items = $g.Group
         if ($items.Count -eq 1) { $items[0] } else {
@@ -327,34 +331,36 @@ try {
 } catch { Show-Err ("Dedup failed: " + $_.Exception.Message) }
 #endregion
 
-#region Export CSV & Excel attempt
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Exporting CSV and XLSX (if available)"
+#region Export Software outputs (all placed directly into software run folder)
+$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Exporting Software CSV and other files"
 try {
-    $result | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
-    Write-Host ("CSV created: " + $csvPath) -ForegroundColor Green
+    # CSV
+    $result | Export-Csv -Path $softwareCsv -NoTypeInformation -Encoding UTF8 -Force
+    Write-Host ("InstalledSoftware CSV created: " + $softwareCsv) -ForegroundColor Green
 } catch { Show-Err ("CSV export failed: " + $_.Exception.Message) }
 
+# Try Excel for software
 try {
     if (Try-InstallImportExcel) {
         Import-Module ImportExcel -ErrorAction Stop
-        $result | Export-Excel -Path $excelPath -WorksheetName "SoftwareInventory" -AutoSize -FreezeTopRow -ErrorAction Stop
-        Write-Host ("XLSX created: " + $excelPath) -ForegroundColor Green
+        $result | Export-Excel -Path $softwareXlsx -WorksheetName "SoftwareInventory" -AutoSize -FreezeTopRow -ErrorAction Stop
+        Write-Host ("InstalledSoftware XLSX created: " + $softwareXlsx) -ForegroundColor Green
     } else {
-        Show-Warn "Excel export skipped (ImportExcel not available or install failed)."
+        Show-Warn "Software Excel export skipped (ImportExcel not available or install failed)."
     }
-} catch { Show-Warn ("Excel export failed: " + $_.Exception.Message) }
-#endregion
+} catch { Show-Warn ("Software Excel export failed: " + $_.Exception.Message) }
 
-#region Export Configs: envs, git, python (parallel pip), node, vscode, docker, summary
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Exporting environment variables (Machine/User/All)"
+# Environment exports (Machine/User/All) -> placed in software folder
 try {
-    $envMachinePath = Join-Path $configFolder "Env-System.csv"
+    $envMachinePath = Join-Path $softwareRunFolder "Env-System.csv"
     $m = [System.Environment]::GetEnvironmentVariables('Machine')
     $m.GetEnumerator() | ForEach-Object { [PSCustomObject]@{ Scope='Machine'; Name=$_.Key; Value=[string]$_.Value } } | Sort-Object Name | Export-Csv -Path $envMachinePath -NoTypeInformation -Encoding UTF8 -Force
-    $envUserPath = Join-Path $configFolder "Env-User.csv"
+
+    $envUserPath = Join-Path $softwareRunFolder "Env-User.csv"
     $u = [System.Environment]::GetEnvironmentVariables('User')
     $u.GetEnumerator() | ForEach-Object { [PSCustomObject]@{ Scope='User'; Name=$_.Key; Value=[string]$_.Value } } | Sort-Object Name | Export-Csv -Path $envUserPath -NoTypeInformation -Encoding UTF8 -Force
-    $envAllPath = Join-Path $configFolder "All-EnvironmentVariables.csv"
+
+    $envAllPath = Join-Path $softwareRunFolder "All-EnvironmentVariables.csv"
     $proc = [System.Environment]::GetEnvironmentVariables('Process')
     $combined = @()
     foreach ($k in $m.Keys) { $combined += [PSCustomObject]@{ Scope='Machine'; Name=$k; Value=[string]$m[$k] } }
@@ -365,10 +371,9 @@ try {
 } catch { Show-Warn ("Env export failed: " + $_.Exception.Message) }
 
 # Git
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Exporting Git & SSH config"
 try {
-    $gitConfigPath = Join-Path $configFolder "Git-Config.txt"
-    $gitSshConfigPath = Join-Path $configFolder "Git-SSH-Config.txt"
+    $gitConfigPath = Join-Path $softwareRunFolder "Git-Config.txt"
+    $gitSshConfigPath = Join-Path $softwareRunFolder "Git-SSH-Config.txt"
     $gout = @()
     $gout += "git --version:`n" + ((& git --version 2>&1) -join "`n")
     $gout += "`n-- git global config --`n" + ((& git config --global --list 2>&1) -join "`n")
@@ -380,8 +385,7 @@ try {
     Write-Host "Git export done." -ForegroundColor Green
 } catch { Show-Warn ("Git export failed: " + $_.Exception.Message) }
 
-# Python - detect interpreters and pip freeze in parallel with timeout
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Detecting Python interpreters & pip packages (parallel)"
+# Python: detect interpreters and pip freeze (parallel jobs, per-interpreter file placed in software folder)
 try {
     $pythonInterpreters = @()
     try { $pyOut = & py -0p 2>$null } catch { $pyOut = $null }
@@ -406,25 +410,25 @@ try {
     $deadline = (Get-Date).AddSeconds( ($pythonInterpreters.Count + 1) * $pipTimeoutSec )
     while ((Get-Job -State Running).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
 
-    $pySummary = Join-Path $configFolder "Python-Packages-Summary.txt"
+    $pySummary = Join-Path $softwareRunFolder "Python-Packages-Summary.csv"
     $out = @()
     foreach ($j in Get-Job) {
         $res = Receive-Job -Job $j -ErrorAction SilentlyContinue
         if ($res) {
-            $fn = Join-Path $configFolder ("Python-" + ((Split-Path $res.Interpreter -Leaf) -replace '[^0-9A-Za-z\._-]','') + "-Packages.txt")
+            $fnSafe = ((Split-Path $res.Interpreter -Leaf) -replace '[^0-9A-Za-z\._-]','')
+            $fn = Join-Path $softwareRunFolder ("Python-" + $fnSafe + "-Packages.txt")
             if ($res.Packages) { Set-Content -Path $fn -Value ($res.Packages -join "`n") -Encoding UTF8 -Force } else { Set-Content -Path $fn -Value "No packages returned." -Encoding UTF8 -Force }
             $out += [PSCustomObject]@{ Interpreter=$res.Interpreter; Version=$res.Version; PackagesFile=$fn }
         }
         Remove-Job -Job $j -Force -ErrorAction SilentlyContinue
     }
-    $out | ConvertTo-Csv -NoTypeInformation | Set-Content -Path $pySummary -Encoding UTF8 -Force
+    if ($out.Count -gt 0) { $out | Export-Csv -Path $pySummary -NoTypeInformation -Encoding UTF8 -Force }
     Write-Host "Python detection complete." -ForegroundColor Green
 } catch { Show-Warn ("Python detection failed: " + $_.Exception.Message) }
 
-# NodeJS / npm summary
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Collecting NodeJS / npm info"
+# NodeJS / npm
 try {
-    $nodeF = Join-Path $configFolder "NodeJS.txt"
+    $nodeF = Join-Path $softwareRunFolder "NodeJS.txt"
     $nOut = @()
     $nOut += "node --version:`n" + (($(& node --version 2>&1) -join "`n"))
     $nOut += "`n npm --version:`n" + (($(& npm --version 2>&1) -join "`n"))
@@ -433,11 +437,10 @@ try {
     Write-Host "Node info exported." -ForegroundColor Green
 } catch { Show-Warn ("Node step failed: " + $_.Exception.Message) }
 
-# VSCode
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Exporting VSCode settings & extensions"
+# VSCode settings & extensions
 try {
-    $vSettings = Join-Path $configFolder "VSCode-Settings.json"
-    $vExts = Join-Path $configFolder "VSCode-Extensions.txt"
+    $vSettings = Join-Path $softwareRunFolder "VSCode-Settings.json"
+    $vExts = Join-Path $softwareRunFolder "VSCode-Extensions.txt"
     $appdata = $env:APPDATA
     $vsSettingsSrc = Join-Path $appdata "Code\User\settings.json"
     if (Test-Path $vsSettingsSrc) { Copy-Item -Path $vsSettingsSrc -Destination $vSettings -Force } else { Set-Content -Path $vSettings -Value "VSCode settings not found." -Encoding UTF8 -Force }
@@ -447,9 +450,8 @@ try {
 } catch { Show-Warn ("VSCode export failed: " + $_.Exception.Message) }
 
 # Docker info
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Collecting Docker info (if present)"
 try {
-    $dockerF = Join-Path $configFolder "Docker-Info.txt"
+    $dockerF = Join-Path $softwareRunFolder "Docker-Info.txt"
     $dv = (& docker --version 2>&1) -join "`n"
     if ($dv -and -not ($dv -match 'not found|is not recognized')) {
         Set-Content -Path $dockerF -Value ((& docker --version 2>&1) -join "`n" + "`n" + ((& docker info 2>&1) -join "`n")) -Encoding UTF8 -Force
@@ -458,268 +460,187 @@ try {
 } catch { Show-Warn ("Docker step failed: " + $_.Exception.Message) }
 #endregion
 
-#region Collect: Hardware & Network Info -> hwinfo.csv + hwinfo.xlsx
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Collecting Hardware & Network info (hwinfo)"
-
+#region Summary & Consolidated CSV (software)
+$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Writing summary and consolidated CSV (software)"
 try {
-    $hwSummary = [ordered]@{}
+    $summaryFile = Join-Path $softwareRunFolder "Summary.txt"
+    $summary = @()
+    $summary += ("Computer: " + $computerName)
+    $summary += ("User: " + $env:USERNAME)
+    $summary += ("RunLabel: " + $runLabel)
+    $summary += ("TimestampLocal: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+    $summary += ("SoftwareRows: " + ($result.Count -as [string]))
+    $summary | Set-Content -Path $summaryFile -Encoding UTF8 -Force
 
-    # OS info
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
-    if ($os) {
-        $hwSummary.OS_Caption = $os.Caption
-        $hwSummary.OS_Name = $os.Caption -replace "Microsoft\s+",""
-        $hwSummary.OS_Version = $os.Version
-        $hwSummary.OS_Build = $os.BuildNumber
-        $hwSummary.OS_Architecture = $os.OSArchitecture
-        $hwSummary.LastBootUpTime = if ($os.LastBootUpTime) { ([Management.ManagementDateTimeConverter]::ToDateTime($os.LastBootUpTime)).ToString('yyyy-MM-dd HH:mm:ss') } else { $null }
+    $consolidated = Join-Path $softwareRunFolder "Consolidated-Software.csv"
+    if ($result -and $result.Count -gt 0) {
+        $result | Select-Object Name,Version,Provider,InstallLocation,MSIProductCode | Export-Csv -Path $consolidated -NoTypeInformation -Encoding UTF8 -Force
     } else {
-        Show-Warn "Unable to read Win32_OperatingSystem"
+        "Name,Version,Provider,InstallLocation,MSIProductCode" | Out-File -FilePath $consolidated -Encoding UTF8
     }
+    Write-Host "Summary & consolidated CSV written." -ForegroundColor Green
+} catch { Show-Warn ("Summary write failed: " + $_.Exception.Message) }
+#endregion
 
-    # Windows edition & activation state (best-effort)
-    try {
-        $slp = Get-CimInstance -Namespace root\cimv2 -ClassName SoftwareLicensingProduct -ErrorAction SilentlyContinue |
-               Where-Object { $_.PartialProductKey -and ($_.Name -match 'Windows') } |
-               Select-Object -First 1
-        if ($slp) {
-            $hwSummary.Windows_Edition = $slp.Name
-            $hwSummary.Windows_LicenseStatus = $slp.LicenseStatus
-            $lsMap = @{
-                0 = 'Unlicensed/Unknown'; 1='Licensed'; 2='Out-Of-Box Grace'; 3='Out-Of-Tolerance Grace'; 4='Non-Genuine Grace';
-                5='Notification'; 6='Extended Grace'
-            }
-            $hwSummary.Windows_LicenseStatusText = $lsMap[$slp.LicenseStatus]
-        } else {
-            $sls = Get-CimInstance -Namespace root\cimv2 -ClassName SoftwareLicensingService -ErrorAction SilentlyContinue
-            if ($sls) { $hwSummary.Windows_LicenseStatusText = "OOBMgmtChannelEnabled:$($sls.OOBManagementChannelEnabled)" }
-        }
-    } catch {
-        Show-Warn ("Windows license query failed: " + $_.Exception.Message)
-    }
+#region Hardware collection -> single hwinfo.xlsx (or fallback hwinfo.csv) + hwinfo-errors.txt
+$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Collecting Hardware -> single workbook"
+try {
+    # Prepare hw error file
+    "`nHWINFO RUN: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n" | Out-File -FilePath $hwErrorFile -Encoding UTF8 -Force
+    function Log-HwError { param($m, $ex) $entry = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $m"; if ($ex) { $entry += "`nException: $($ex.Message)`nStack:`n$($ex.StackTrace)`n" } ; Add-Content -Path $hwErrorFile -Value $entry }
 
-    # Manufacturer / Model
-    $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
-    if ($cs) {
-        $hwSummary.Manufacturer = $cs.Manufacturer
-        $hwSummary.Model = $cs.Model
-        $hwSummary.SystemType = $cs.SystemType
-        $hwSummary.TotalPhysicalMemoryBytes = [int64]$cs.TotalPhysicalMemory
-        $hwSummary.TotalPhysicalMemoryGB = if ($cs.TotalPhysicalMemory) { [math]::Round($cs.TotalPhysicalMemory / 1GB,2) } else { $null }
-    }
+    # OS & system
+    try { $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop } catch { Log-HwError "Win32_OperatingSystem query failed" $_ ; $os = $null }
+    try { $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop } catch { Log-HwError "Win32_ComputerSystem query failed" $_ ; $cs = $null }
 
-    # CPU(s)
-    $cpus = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue
-    $cpuRows = @()
-    if ($cpus) {
-        foreach ($c in $cpus) {
-            $cpuRows += [PSCustomObject]@{
-                Name = $c.Name
-                Manufacturer = $c.Manufacturer
-                NumberOfCores = $c.NumberOfCores
-                NumberOfLogicalProcessors = $c.NumberOfLogicalProcessors
-                MaxClockSpeedMHz = $c.MaxClockSpeed
-                Architecture = $c.AddressWidth
-            }
-        }
-        $hwSummary.CPU = ($cpus | Select-Object -First 1).Name
-    }
-
-    # RAM modules
-    $mem = Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction SilentlyContinue
-    $memRows = @()
-    if ($mem) {
-        foreach ($m in $mem) {
-            $memRows += [PSCustomObject]@{
-                DeviceLocator = $m.DeviceLocator
-                CapacityBytes = [int64]$m.Capacity
-                CapacityGB = if ($m.Capacity) { [math]::Round($m.Capacity / 1GB, 2) } else { $null }
-                SpeedMHz = $m.Speed
-                Manufacturer = $m.Manufacturer
-                PartNumber = $m.PartNumber
-            }
+    # CPU
+    try { $cpus = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop } catch { Log-HwError "Win32_Processor query failed" $_ ; $cpus = @() }
+    $cpuRows = foreach ($c in $cpus) {
+        [PSCustomObject]@{
+            Name = $c.Name
+            Manufacturer = $c.Manufacturer
+            Cores = $c.NumberOfCores
+            LogicalProcessors = $c.NumberOfLogicalProcessors
+            MaxClock_MHz = $c.MaxClockSpeed
+            AddressWidth = $c.AddressWidth
         }
     }
 
-    # Video / GPU
-    $gpus = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue
-    $gpuRows = @()
-    if ($gpus) {
-        foreach ($g in $gpus) {
-            $gpuRows += [PSCustomObject]@{
-                Name = $g.Name
-                DriverVersion = $g.DriverVersion
-                VideoProcessor = $g.VideoProcessor
-                AdapterRAM_Bytes = if ($g.AdapterRAM) { [int64]$g.AdapterRAM } else { $null }
-                AdapterRAM_GB = if ($g.AdapterRAM) { [math]::Round($g.AdapterRAM/1GB,2) } else { $null }
-            }
-        }
-        $hwSummary.PrimaryGPU = ($gpus | Select-Object -First 1).Name
-    }
-
-    # Disks (physical and logical)
-    $diskDrive = Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction SilentlyContinue
-    $diskRows = @()
-    if ($diskDrive) {
-        foreach ($d in $diskDrive) {
-            $diskRows += [PSCustomObject]@{
-                Model = $d.Model
-                InterfaceType = $d.InterfaceType
-                MediaType = $d.MediaType
-                SizeBytes = if ($d.Size) { [int64]$d.Size } else { $null }
-                SizeGB = if ($d.Size) { [math]::Round($d.Size/1GB,2) } else { $null }
-                SerialNumber = $d.SerialNumber
-            }
-        }
-        $primaryDisk = $diskRows | Select-Object -First 1
-        if ($primaryDisk) { $hwSummary.PrimaryDiskModel = $primaryDisk.Model; $hwSummary.PrimaryDiskSizeGB = $primaryDisk.SizeGB }
-    }
-
-    # Logical drives (to show drive letters + sizes)
-    $logical = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue
-    $logicalRows = @()
-    if ($logical) {
-        foreach ($ld in $logical) {
-            $logicalRows += [PSCustomObject]@{
-                DeviceID = $ld.DeviceID
-                VolumeName = $ld.VolumeName
-                FileSystem = $ld.FileSystem
-                SizeBytes = if ($ld.Size) { [int64]$ld.Size } else { $null }
-                SizeGB = if ($ld.Size) { [math]::Round($ld.Size/1GB,2) } else { $null }
-                FreeBytes = if ($ld.FreeSpace) { [int64]$ld.FreeSpace } else { $null }
-                FreeGB = if ($ld.FreeSpace) { [math]::Round($ld.FreeSpace/1GB,2) } else { $null }
-            }
+    # Memory
+    try { $mem = Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop } catch { Log-HwError "Win32_PhysicalMemory query failed" $_ ; $mem = @() }
+    $memRows = foreach ($m in $mem) {
+        [PSCustomObject]@{
+            DeviceLocator = $m.DeviceLocator
+            CapacityBytes = if ($m.Capacity) { [int64]$m.Capacity } else { $null }
+            CapacityGB = if ($m.Capacity) { [math]::Round($m.Capacity/1GB,2) } else { $null }
+            SpeedMHz = $m.Speed
+            Manufacturer = $m.Manufacturer
+            PartNumber = $m.PartNumber
         }
     }
 
-    # Network adapters & current IPs
-    $netAdapters = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" -ErrorAction SilentlyContinue
-    $netRows = @()
-    $primaryIP = $null
-    if ($netAdapters) {
-        foreach ($na in $netAdapters) {
-            $ips = $na.IPAddress -join ';'
-            $netRows += [PSCustomObject]@{
-                Description = $na.Description
-                MACAddress = $na.MACAddress
-                IPAddress = $ips
-                DefaultIPGateway = ($na.DefaultIPGateway -join ';')
-                DNSServerSearchOrder = ($na.DNSServerSearchOrder -join ';')
-                DHCPEnabled = $na.DHCPEnabled
-                ServiceName = $na.ServiceName
-            }
-            if (-not $primaryIP -and $na.IPAddress) {
-                $firstipv4 = ($na.IPAddress | Where-Object { $_ -and ($_ -notmatch '^169\.254\.') -and ($_ -match '^\d{1,3}(\.\d{1,3}){3}$') } | Select-Object -First 1)
-                if ($firstipv4) { $primaryIP = $firstipv4 }
-            }
+    # GPUs
+    try { $gpus = Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop } catch { Log-HwError "Win32_VideoController query failed" $_ ; $gpus = @() }
+    $gpuRows = foreach ($g in $gpus) {
+        [PSCustomObject]@{
+            Name = $g.Name
+            DriverVersion = $g.DriverVersion
+            VideoProcessor = $g.VideoProcessor
+            AdapterRAM_Bytes = if ($g.AdapterRAM) { [int64]$g.AdapterRAM } else { $null }
+            AdapterRAM_GB = if ($g.AdapterRAM) { [math]::Round($g.AdapterRAM/1GB,2) } else { $null }
         }
-    } else {
-        try {
-            $ips = Get-NetIPAddress -AddressFamily IPv4 -PrefixOrigin 'Dhcp','Manual' -ErrorAction SilentlyContinue |
-                   Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' } |
-                   Select-Object -First 1
-            if ($ips) { $primaryIP = $ips.IPAddress }
-        } catch {}
-    }
-    $hwSummary.PrimaryIP = $primaryIP
-
-    # USB controllers and serial ports (physical ports)
-    $usb = Get-CimInstance -ClassName Win32_USBController -ErrorAction SilentlyContinue
-    $usbRows = @()
-    if ($usb) { foreach ($u in $usb) { $usbRows += [PSCustomObject]@{ Name = $u.Name; DeviceID = $u.DeviceID; PNPDeviceID = $u.PNPDeviceID } } }
-
-    $serial = Get-CimInstance -ClassName Win32_SerialPort -ErrorAction SilentlyContinue
-    $serialRows = @()
-    if ($serial) { foreach ($s in $serial) { $serialRows += [PSCustomObject]@{ DeviceID = $s.DeviceID; Name = $s.Name; ProviderType = $s.ProviderType } } }
-
-    # BIOS / Firmware info
-    $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue
-    if ($bios) {
-        $hwSummary.BIOS_Manufacturer = $bios.Manufacturer
-        $hwSummary.BIOS_SerialNumber = $bios.SerialNumber
-        $hwSummary.BIOS_Version = ($bios.SMBIOSBIOSVersion -as [string])
     }
 
-    # Build summary table row (flatten some fields)
+    # Disks
+    try { $disks = Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction Stop } catch { Log-HwError "Win32_DiskDrive query failed" $_ ; $disks = @() }
+    $diskRows = foreach ($d in $disks) {
+        [PSCustomObject]@{
+            Model = $d.Model
+            InterfaceType = $d.InterfaceType
+            MediaType = $d.MediaType
+            SizeBytes = if ($d.Size) { [int64]$d.Size } else { $null }
+            SizeGB = if ($d.Size) { [math]::Round($d.Size/1GB,2) } else { $null }
+            SerialNumber = $d.SerialNumber
+        }
+    }
+
+    # Logical disks
+    try { $logical = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction Stop } catch { Log-HwError "Win32_LogicalDisk query failed" $_ ; $logical = @() }
+    $logicalRows = foreach ($ld in $logical) {
+        [PSCustomObject]@{
+            DeviceID = $ld.DeviceID
+            VolumeName = $ld.VolumeName
+            FileSystem = $ld.FileSystem
+            SizeBytes = if ($ld.Size) { [int64]$ld.Size } else { $null }
+            SizeGB = if ($ld.Size) { [math]::Round($ld.Size/1GB,2) } else { $null }
+            FreeBytes = if ($ld.FreeSpace) { [int64]$ld.FreeSpace } else { $null }
+            FreeGB = if ($ld.FreeSpace) { [math]::Round($ld.FreeSpace/1GB,2) } else { $null }
+        }
+    }
+
+    # Network & primary IP
+    try { $netAdapters = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" -ErrorAction Stop } catch { Log-HwError "Win32_NetworkAdapterConfiguration query failed" $_ ; $netAdapters = @() }
+    $netRows = @(); $primaryIP = $null
+    foreach ($na in $netAdapters) {
+        $ips = if ($na.IPAddress) { $na.IPAddress -join ';' } else { '' }
+        $netRows += [PSCustomObject]@{
+            Description = $na.Description
+            MACAddress = $na.MACAddress
+            IPAddress = $ips
+            DefaultIPGateway = ($na.DefaultIPGateway -join ';')
+            DNSServerSearchOrder = ($na.DNSServerSearchOrder -join ';')
+            DHCPEnabled = $na.DHCPEnabled
+            ServiceName = $na.ServiceName
+        }
+        if (-not $primaryIP -and $na.IPAddress) {
+            $firstipv4 = ($na.IPAddress | Where-Object { $_ -and ($_ -notmatch '^169\.254\.') -and ($_ -match '^\d{1,3}(\.\d{1,3}){3}$') } | Select-Object -First 1)
+            if ($firstipv4) { $primaryIP = $firstipv4 }
+        }
+    }
+
+    # USB controllers & serial
+    try { $usb = Get-CimInstance -ClassName Win32_USBController -ErrorAction Stop } catch { Log-HwError "Win32_USBController query failed" $_ ; $usb = @() }
+    $usbRows = foreach ($u in $usb) { [PSCustomObject]@{ Name=$u.Name; DeviceID=$u.DeviceID; PNPDeviceID=$u.PNPDeviceID } }
+
+    try { $serial = Get-CimInstance -ClassName Win32_SerialPort -ErrorAction Stop } catch { Log-HwError "Win32_SerialPort query failed" $_ ; $serial = @() }
+    $serialRows = foreach ($s in $serial) { [PSCustomObject]@{ DeviceID=$s.DeviceID; Name=$s.Name; ProviderType=$s.ProviderType } }
+
+    # BIOS
+    try { $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop } catch { Log-HwError "Win32_BIOS query failed" $_ ; $bios = @() }
+    $biosInfo = $bios | Select-Object -First 1
+
+    # Summary row flatten
     $summaryRow = [PSCustomObject]@{
         ComputerName = $computerName
-        Manufacturer = ($hwSummary.Manufacturer -as [string])
-        Model = ($hwSummary.Model -as [string])
-        SystemType = ($hwSummary.SystemType -as [string])
-        OS = ($hwSummary.OS_Caption -as [string])
-        OS_Version = ($hwSummary.OS_Version -as [string])
-        OS_Build = ($hwSummary.OS_Build -as [string])
-        Windows_Edition = ($hwSummary.Windows_Edition -as [string])
-        Windows_LicenseStatus = ($hwSummary.Windows_LicenseStatusText -as [string])
-        CPU = ($hwSummary.CPU -as [string])
-        RAM_GB = ($hwSummary.TotalPhysicalMemoryGB -as [string])
-        PrimaryGPU = ($hwSummary.PrimaryGPU -as [string])
-        PrimaryDiskModel = ($hwSummary.PrimaryDiskModel -as [string])
-        PrimaryDiskSize_GB = ($hwSummary.PrimaryDiskSizeGB -as [string])
-        PrimaryIP = ($hwSummary.PrimaryIP -as [string])
-        BIOS_Serial = ($hwSummary.BIOS_SerialNumber -as [string])
+        Manufacturer = if ($cs) { ($cs | Select-Object -First 1).Manufacturer } else { $null }
+        Model = if ($cs) { ($cs | Select-Object -First 1).Model } else { $null }
+        SystemType = if ($cs) { ($cs | Select-Object -First 1).SystemType } else { $null }
+        OS = if ($os) { $os.Caption } else { $null }
+        OS_Version = if ($os) { $os.Version } else { $null }
+        OS_Build = if ($os) { $os.BuildNumber } else { $null }
+        CPU = if ($cpuRows.Count -gt 0) { $cpuRows[0].Name } else { $null }
+        RAM_GB = if ($cs -and $cs.TotalPhysicalMemory) { [math]::Round($cs.TotalPhysicalMemory/1GB,2) } else { $null }
+        PrimaryGPU = if ($gpuRows.Count -gt 0) { $gpuRows[0].Name } else { $null }
+        PrimaryDiskModel = if ($diskRows.Count -gt 0) { $diskRows[0].Model } else { $null }
+        PrimaryDiskSize_GB = if ($diskRows.Count -gt 0) { $diskRows[0].SizeGB } else { $null }
+        PrimaryIP = $primaryIP
+        BIOS_Serial = if ($biosInfo) { $biosInfo.SerialNumber } else { $null }
     }
 
-    # Export summary CSV
-    $hwCsv = Join-Path $configFolder "hwinfo.csv"
-    $summaryRow | Export-Csv -Path $hwCsv -NoTypeInformation -Encoding UTF8 -Force
-    Write-Host "hwinfo summary CSV created: $hwCsv" -ForegroundColor Green
+    # Export single hw CSV summary (always)
+    try { $summaryRow | Export-Csv -Path $hwCsvSummary -NoTypeInformation -Encoding UTF8 -Force; Write-Host "hwinfo.csv written" -ForegroundColor Green } catch { Log-HwError "Failed writing hwinfo.csv" $_ }
 
-    # Also export detailed component CSVs
-    $cpuCsv = Join-Path $configFolder "hw-cpus.csv"; $cpuRows | Export-Csv -Path $cpuCsv -NoTypeInformation -Encoding UTF8 -Force
-    $memCsv = Join-Path $configFolder "hw-memory.csv"; $memRows | Export-Csv -Path $memCsv -NoTypeInformation -Encoding UTF8 -Force
-    $gpuCsv = Join-Path $configFolder "hw-gpus.csv"; $gpuRows | Export-Csv -Path $gpuCsv -NoTypeInformation -Encoding UTF8 -Force
-    $diskCsv = Join-Path $configFolder "hw-disks.csv"; $diskRows | Export-Csv -Path $diskCsv -NoTypeInformation -Encoding UTF8 -Force
-    $logicalCsv = Join-Path $configFolder "hw-logicaldisks.csv"; $logicalRows | Export-Csv -Path $logicalCsv -NoTypeInformation -Encoding UTF8 -Force
-    $netCsv = Join-Path $configFolder "hw-netadapters.csv"; $netRows | Export-Csv -Path $netCsv -NoTypeInformation -Encoding UTF8 -Force
-    $usbCsv = Join-Path $configFolder "hw-usbcontrollers.csv"; $usbRows | Export-Csv -Path $usbCsv -NoTypeInformation -Encoding UTF8 -Force
-    $serialCsv = Join-Path $configFolder "hw-serialports.csv"; $serialRows | Export-Csv -Path $serialCsv -NoTypeInformation -Encoding UTF8 -Force
-
-    # Try to produce hwinfo.xlsx with multiple sheets (ImportExcel)
+    # Try to write single Excel workbook - ImportExcel required
     $excelOk = $false
     try {
         if (Try-InstallImportExcel) {
             Import-Module ImportExcel -ErrorAction Stop
-            $wb = Join-Path $configFolder "hwinfo.xlsx"
-            $summaryRow | Export-Excel -Path $wb -WorksheetName 'Summary' -AutoSize -TableName 'Summary' -FreezeTopRow -ClearSheet
-            if ($cpuRows.Count -gt 0) { $cpuRows | Export-Excel -Path $wb -WorksheetName 'Processors' -AutoSize -TableName 'Processors' -Append }
-            if ($memRows.Count -gt 0) { $memRows | Export-Excel -Path $wb -WorksheetName 'Memory' -AutoSize -TableName 'Memory' -Append }
-            if ($gpuRows.Count -gt 0) { $gpuRows | Export-Excel -Path $wb -WorksheetName 'VideoControllers' -AutoSize -TableName 'Video' -Append }
-            if ($diskRows.Count -gt 0) { $diskRows | Export-Excel -Path $wb -WorksheetName 'Disks' -AutoSize -TableName 'Disks' -Append }
-            if ($logicalRows.Count -gt 0) { $logicalRows | Export-Excel -Path $wb -WorksheetName 'LogicalDisks' -AutoSize -TableName 'LogicalDisks' -Append }
-            if ($netRows.Count -gt 0) { $netRows | Export-Excel -Path $wb -WorksheetName 'NetworkAdapters' -AutoSize -TableName 'Network' -Append }
-            if ($usbRows.Count -gt 0) { $usbRows | Export-Excel -Path $wb -WorksheetName 'USBControllers' -AutoSize -TableName 'USB' -Append }
-            if ($serialRows.Count -gt 0) { $serialRows | Export-Excel -Path $wb -WorksheetName 'SerialPorts' -AutoSize -TableName 'Serial' -Append }
-            Write-Host "hwinfo Excel workbook created: $wb" -ForegroundColor Green
+            $summaryRow | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'Summary' -AutoSize -ClearSheet
+            if ($cpuRows.Count -gt 0) { $cpuRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'Processors' -AutoSize -Append }
+            if ($memRows.Count -gt 0) { $memRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'Memory' -AutoSize -Append }
+            if ($gpuRows.Count -gt 0) { $gpuRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'Video' -AutoSize -Append }
+            if ($diskRows.Count -gt 0) { $diskRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'Disks' -AutoSize -Append }
+            if ($logicalRows.Count -gt 0) { $logicalRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'LogicalDisks' -AutoSize -Append }
+            if ($netRows.Count -gt 0) { $netRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'NetworkAdapters' -AutoSize -Append }
+            if ($usbRows.Count -gt 0) { $usbRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'USBControllers' -AutoSize -Append }
+            if ($serialRows.Count -gt 0) { $serialRows | Export-Excel -Path $hwExcelWorkbook -WorksheetName 'SerialPorts' -AutoSize -Append }
+            Write-Host "hwinfo.xlsx written: $hwExcelWorkbook" -ForegroundColor Green
             $excelOk = $true
         } else {
-            Show-Warn "ImportExcel module unavailable; only CSVs created."
+            Log-HwError "ImportExcel unavailable or failed to install; hwinfo.xlsx not created."
         }
     } catch {
-        Show-Warn ("Writing hwinfo.xlsx failed: " + $_.Exception.Message)
+        Log-HwError "Failed to write hwinfo.xlsx" $_
     }
+
+    if (-not $excelOk) {
+        Write-Host "hwinfo.xlsx not produced. hwinfo.csv and hwinfo-errors.txt are available in: $hardwareRunFolder" -ForegroundColor Yellow
+    }
+
 } catch {
-    Show-Warn ("hwinfo collection failed: " + $_.Exception.Message)
+    Add-Content -Path $hwErrorFile -Value ("Unhandled hwinfo failure: " + $_.Exception.Message + "`n" + $_.Exception.StackTrace)
+    Show-Err "Unhandled hwinfo collection failure. See $hwErrorFile"
 }
-#endregion
-
-#region Summary & Consolidated CSV
-$currentStep++; Show-Step -i $currentStep -t $totalSteps -title "Writing summary and consolidated CSV"
-try {
-    $summaryFile = Join-Path $configFolder "Summary.txt"
-    $summary = @()
-    $summary += ("Machine: " + $computerName)
-    $summary += ("User: " + $env:USERNAME)
-    $summary += ("RunLabel: " + $runFolderName)
-    $summary += ("TimestampLocal: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
-    $summary += ("Rows: " + $result.Count)
-    $summary | Set-Content -Path $summaryFile -Encoding UTF8 -Force
-
-    $consolidated = Join-Path $runFolder "Consolidated-Software-And-Env.csv"
-    $tableCsv = $result | Select-Object Name,Version,Provider,InstallLocation,MSIProductCode | ConvertTo-Csv -NoTypeInformation
-    $tableCsv | Set-Content -Path $consolidated -Encoding UTF8 -Force
-    Write-Host "Summary & consolidated CSV written." -ForegroundColor Green
-} catch { Show-Warn ("Summary write failed: " + $_.Exception.Message) }
 #endregion
 
 #region Finish
@@ -727,9 +648,12 @@ $currentStep = $totalSteps
 Show-Step -i $currentStep -t $totalSteps -title "Completed"
 Write-Progress -Activity "Collect-DevProfile" -Completed -Id 1
 Write-Host ""
-Write-Host "Completed. Outputs are in:" -ForegroundColor Cyan
-Write-Host $runFolder -ForegroundColor Green
-if (Test-Path $excelPath) { Write-Host ("CSV -> " + $csvPath + "  ;  Excel -> " + $excelPath) -ForegroundColor Cyan } else { Write-Host ("CSV -> " + $csvPath + "  ;  Excel not produced.") -ForegroundColor Yellow }
+Write-Host "Completed." -ForegroundColor Cyan
+Write-Host "Software outputs -> $softwareRunFolder" -ForegroundColor Green
+Write-Host "Hardware outputs -> $hardwareRunFolder" -ForegroundColor Green
+if (Test-Path $softwareXlsx) { Write-Host ("Software Excel -> " + $softwareXlsx) -ForegroundColor Cyan }
+if (Test-Path $hwExcelWorkbook) { Write-Host ("Hardware Excel -> " + $hwExcelWorkbook) -ForegroundColor Cyan }
+Write-Host "If ImportExcel failed, check hwinfo-errors.txt in the hardware folder." -ForegroundColor Yellow
 
 # Return object for interactive runs
 return $result
